@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>lightswitch</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 40 24" aria-hidden="true">
+          <defs>
+            <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0" stop-color="#7c5cff" /><stop offset="1" stop-color="#38bdf8" />
+            </linearGradient>
+          </defs>
+          <rect width="40" height="24" rx="12" fill="url(#g)" />
+          <circle cx="28" cy="12" r="8" fill="#fff" />
+        </svg>
+        <span>lightswitch</span>
+      </div>
+
+      <div class="section-label">
+        <span>Profiles</span>
+        <button class="icon-btn" data-act="profile-new" title="New profile">+</button>
+      </div>
+      <div id="profile-list" class="profile-list"></div>
+
+      <nav class="nav">
+        <button class="nav-item" data-act="page" data-page="macros">
+          <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6" /><circle cx="18" cy="16" r="3" /></svg>
+          Macros
+        </button>
+        <button class="nav-item" data-act="page" data-page="settings">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" /><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" /></svg>
+          Settings
+        </button>
+      </nav>
+
+      <div id="device" class="device-card"></div>
+    </aside>
+
+    <main id="main" class="main"></main>
+  </div>
+  <div id="toast" class="toast"></div>
+  <script src="app.js"></script>
+</body>
+</html>

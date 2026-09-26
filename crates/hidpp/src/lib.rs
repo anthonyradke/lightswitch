@@ -11,6 +11,9 @@ const REPORT_LONG: u8 = 0x11;
 const LONG_LEN: usize = 20;
 /// Arbitrary software id so we can tell our replies apart from other apps'.
 const SW_ID: u8 = 0x0A;
+/// An idle wireless mouse is in power-saving mode and can take over a second
+/// to answer, so this is deliberately generous.
+const REQUEST_TIMEOUT: Duration = Duration::from_millis(2500);
 /// Device index used when the mouse is plugged in by cable.
 pub const WIRED_INDEX: u8 = 0xFF;
 
@@ -18,6 +21,7 @@ pub mod feature {
     pub const ROOT: u16 = 0x0000;
     pub const FEATURE_SET: u16 = 0x0001;
     pub const DEVICE_NAME: u16 = 0x0005;
+    pub const WIRELESS_STATUS: u16 = 0x1D4B;
     pub const BATTERY_STATUS: u16 = 0x1000;
     pub const UNIFIED_BATTERY: u16 = 0x1004;
     pub const ADJUSTABLE_DPI: u16 = 0x2201;
@@ -46,6 +50,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub struct Mouse {
     dev: HidDevice,
     index: u8,
+    timeout: Duration,
     pub product: String,
 }
 
@@ -63,9 +68,11 @@ impl Mouse {
             }
             found_interface = true;
             let product = info.product_string().unwrap_or("?").to_string();
-            let mut mouse = Mouse { dev: api.open_path(info.path())?, index: 0, product };
-            // Receiver slots are 1..=6; a cabled mouse answers on 0xFF.
-            for index in [1u8, 2, 3, 4, 5, 6, WIRED_INDEX] {
+            let dev = api.open_path(info.path())?;
+            let mut mouse = Mouse { dev, index: 0, timeout: REQUEST_TIMEOUT, product };
+            // Receiver slot 1 is the usual one and a cabled mouse answers on 0xFF;
+            // try those before the rarely used slots 2..=6.
+            for index in [1u8, WIRED_INDEX, 2, 3, 4, 5, 6] {
                 mouse.index = index;
                 if mouse.ping().is_ok() {
                     return Ok(mouse);
@@ -89,7 +96,7 @@ impl Mouse {
         buf[4..4 + params.len()].copy_from_slice(params);
         self.dev.write(&buf)?;
 
-        let deadline = Instant::now() + Duration::from_millis(500);
+        let deadline = Instant::now() + self.timeout;
         let mut resp = [0u8; LONG_LEN];
         while let Some(left) = deadline.checked_duration_since(Instant::now()) {
             let n = self.dev.read_timeout(&mut resp, left.as_millis().max(1) as i32)?;
@@ -177,5 +184,43 @@ impl Mouse {
         let f = self.feature_index(feature::REPORT_RATE)?;
         let ms = self.request(f, 1, &[])?[0].max(1);
         Ok(1000 / ms as u16)
+    }
+
+    /// Set report rate in Hz (125, 250, 500 or 1000).
+    pub fn set_report_rate(&mut self, hz: u16) -> Result<()> {
+        let f = self.feature_index(feature::REPORT_RATE)?;
+        let ms = (1000 / hz.clamp(125, 1000)) as u8;
+        self.request(f, 2, &[ms])?;
+        Ok(())
+    }
+
+    /// Put the mouse in host mode so software controls it. In the default
+    /// onboard mode the stored profile owns the report rate and rejects changes.
+    /// The mouse falls back to onboard mode when it power-cycles.
+    pub fn ensure_host_mode(&mut self) -> Result<()> {
+        const ONBOARD: u8 = 1;
+        const HOST: u8 = 2;
+        let f = match self.feature_index(feature::ONBOARD_PROFILES) {
+            Ok(f) => f,
+            Err(Error::Unsupported(_)) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if self.request(f, 2, &[])?[0] == ONBOARD {
+            self.request(f, 1, &[HOST])?;
+        }
+        Ok(())
+    }
+
+    /// Wait up to `timeout_ms` for an unsolicited report addressed to this device.
+    /// Returns (feature index, function/event byte, params).
+    pub fn read_event(&mut self, timeout_ms: i32) -> Result<Option<(u8, u8, [u8; 16])>> {
+        let mut resp = [0u8; LONG_LEN];
+        let n = self.dev.read_timeout(&mut resp, timeout_ms)?;
+        if n < 5 || resp[0] != REPORT_LONG || resp[1] != self.index {
+            return Ok(None);
+        }
+        let mut params = [0u8; 16];
+        params.copy_from_slice(&resp[4..20]);
+        Ok(Some((resp[2], resp[3], params)))
     }
 }
