@@ -732,7 +732,19 @@ document.addEventListener("change", async (e) => {
   }
 });
 
+// Windows doesn't run the global keyboard hook for keys typed into our own
+// window, so forward them to the recorder ourselves while it is listening.
+function forwardKey(e, down) {
+  if (!keyCapture && !recording) return false;
+  e.preventDefault();
+  if (!e.repeat) invoke("ui_key", { code: e.code, down });
+  return true;
+}
+
+document.addEventListener("keyup", (e) => forwardKey(e, false));
+
 document.addEventListener("keydown", (e) => {
+  if (forwardKey(e, true)) return;
   if (e.key === "Enter" && e.target.matches("input")) e.target.blur();
   if (!hotkeyCapture) return;
   e.preventDefault();

@@ -11,6 +11,7 @@ use std::sync::{Mutex, OnceLock};
 
 use windows_sys::Win32::Foundation::{LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemInformation::GetTickCount;
 use windows_sys::Win32::System::Threading::{GetCurrentProcessId, GetCurrentThreadId};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -41,8 +42,9 @@ enum Raw {
 
 struct Recording {
     events: Vec<(u32, Raw)>,
-    /// Keys currently held, used to drop auto-repeat and detect combo release.
-    held: Vec<u16>,
+    /// Physical keys (scan code, extended) currently held, used to drop
+    /// auto-repeat, de-duplicate hook/UI events and detect combo release.
+    held: Vec<(u16, bool)>,
 }
 
 impl Recording {
@@ -186,43 +188,161 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code == HC_ACTION as i32 {
         let info = &*(lparam as *const KBDLLHOOKSTRUCT);
-        let mode = MODE.load(Ordering::Relaxed);
-        if info.flags & LLKHF_INJECTED == 0 && mode != MODE_OFF {
+        if info.flags & LLKHF_INJECTED == 0 {
             let down = matches!(wparam as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-            let vk = info.vkCode as u16;
-            let raw = Raw::Key { vk, scan: info.scanCode as u16, ext: info.flags & LLKHF_EXTENDED != 0, down };
-            let mut rec = RECORD.lock().unwrap();
-            let held = rec.held.contains(&vk);
-            if down && !held {
-                rec.held.push(vk);
-                rec.events.push((info.time, raw));
-            } else if !down {
-                rec.held.retain(|&k| k != vk);
-                if mode == MODE_MACRO {
-                    rec.events.push((info.time, raw));
-                }
-            }
-            if mode == MODE_COMBO {
-                if !down && rec.held.is_empty() && !rec.events.is_empty() {
-                    let keys = rec
-                        .events
-                        .drain(..)
-                        .filter_map(|(_, r)| match r {
-                            Raw::Key { vk, scan, ext, .. } => Some(key_ref(vk, scan, ext)),
-                            Raw::Mouse { .. } => None,
-                        })
-                        .collect();
-                    MODE.store(MODE_OFF, Ordering::SeqCst);
-                    post(MSG_KEYBOARD_OFF);
-                    if let Some(tx) = COMBO_DONE.lock().unwrap().take() {
-                        let _ = tx.send(keys);
-                    }
-                }
+            let ext = info.flags & LLKHF_EXTENDED != 0;
+            if handle_key(info.vkCode as u16, info.scanCode as u16, ext, down, info.time) {
                 return 1;
             }
         }
     }
     CallNextHookEx(std::ptr::null_mut(), code, wparam, lparam)
+}
+
+/// A key event from our own window. Windows does not run low-level keyboard
+/// hooks for input going to our own foreground window, so the UI forwards its
+/// key events here while recording or capturing.
+pub fn ui_key(code: &str, down: bool) {
+    let Some((scan, ext)) = scan_code(code) else { return };
+    let vk = unsafe { MapVirtualKeyW(scan as u32 | if ext { 0xE000 } else { 0 }, MAPVK_VSC_TO_VK_EX) } as u16;
+    let vk = match (code, vk) {
+        ("NumLock", _) => VK_NUMLOCK,
+        ("Pause", _) => VK_PAUSE,
+        (_, 0) => return,
+        (_, vk) => vk,
+    };
+    handle_key(vk, scan, ext, down, unsafe { GetTickCount() });
+}
+
+/// Shared by the hook and the UI. Keys are identified by physical key
+/// (scan code), so an event seen by both sources is only recorded once.
+/// Returns true if the key should be swallowed.
+fn handle_key(vk: u16, scan: u16, ext: bool, down: bool, time: u32) -> bool {
+    let mode = MODE.load(Ordering::Relaxed);
+    if mode == MODE_OFF {
+        return false;
+    }
+    let id = (scan, ext);
+    let raw = Raw::Key { vk, scan, ext, down };
+    let mut rec = RECORD.lock().unwrap();
+    let held = rec.held.contains(&id);
+    if down && !held {
+        rec.held.push(id);
+        rec.events.push((time, raw));
+    } else if !down && held {
+        rec.held.retain(|&k| k != id);
+        if mode == MODE_MACRO {
+            rec.events.push((time, raw));
+        }
+    }
+    if mode == MODE_COMBO {
+        if !down && rec.held.is_empty() && !rec.events.is_empty() {
+            let keys = rec
+                .events
+                .drain(..)
+                .filter_map(|(_, r)| match r {
+                    Raw::Key { vk, scan, ext, .. } => Some(key_ref(vk, scan, ext)),
+                    Raw::Mouse { .. } => None,
+                })
+                .collect();
+            MODE.store(MODE_OFF, Ordering::SeqCst);
+            post(MSG_KEYBOARD_OFF);
+            if let Some(tx) = COMBO_DONE.lock().unwrap().take() {
+                let _ = tx.send(keys);
+            }
+        }
+        return true;
+    }
+    false
+}
+
+/// Set-1 scan code (and extended flag) for a browser `KeyboardEvent.code`.
+fn scan_code(code: &str) -> Option<(u16, bool)> {
+    const LETTERS: [(u8, u16); 26] = [
+        (b'A', 0x1E), (b'B', 0x30), (b'C', 0x2E), (b'D', 0x20), (b'E', 0x12), (b'F', 0x21), (b'G', 0x22),
+        (b'H', 0x23), (b'I', 0x17), (b'J', 0x24), (b'K', 0x25), (b'L', 0x26), (b'M', 0x32), (b'N', 0x31),
+        (b'O', 0x18), (b'P', 0x19), (b'Q', 0x10), (b'R', 0x13), (b'S', 0x1F), (b'T', 0x14), (b'U', 0x16),
+        (b'V', 0x2F), (b'W', 0x11), (b'X', 0x2D), (b'Y', 0x15), (b'Z', 0x2C),
+    ];
+    if let Some(l) = code.strip_prefix("Key") {
+        let b = *l.as_bytes().first()?;
+        return LETTERS.iter().find(|(c, _)| *c == b).map(|&(_, s)| (s, false));
+    }
+    if let Some(d) = code.strip_prefix("Digit") {
+        let n: u16 = d.parse().ok()?;
+        return Some((if n == 0 { 0x0B } else { 0x01 + n }, false));
+    }
+    if let Some(f) = code.strip_prefix('F').and_then(|f| f.parse::<u16>().ok()) {
+        return match f {
+            1..=10 => Some((0x3A + f, false)),
+            11 => Some((0x57, false)),
+            12 => Some((0x58, false)),
+            13..=23 => Some((0x64 + f - 13, false)),
+            24 => Some((0x76, false)),
+            _ => None,
+        };
+    }
+    let (scan, ext) = match code {
+        "Escape" => (0x01, false),
+        "Minus" => (0x0C, false),
+        "Equal" => (0x0D, false),
+        "Backspace" => (0x0E, false),
+        "Tab" => (0x0F, false),
+        "BracketLeft" => (0x1A, false),
+        "BracketRight" => (0x1B, false),
+        "Enter" => (0x1C, false),
+        "ControlLeft" => (0x1D, false),
+        "Semicolon" => (0x27, false),
+        "Quote" => (0x28, false),
+        "Backquote" => (0x29, false),
+        "ShiftLeft" => (0x2A, false),
+        "Backslash" => (0x2B, false),
+        "Comma" => (0x33, false),
+        "Period" => (0x34, false),
+        "Slash" => (0x35, false),
+        "ShiftRight" => (0x36, false),
+        "NumpadMultiply" => (0x37, false),
+        "AltLeft" => (0x38, false),
+        "Space" => (0x39, false),
+        "CapsLock" => (0x3A, false),
+        "Pause" => (0x45, false),
+        "ScrollLock" => (0x46, false),
+        "Numpad7" => (0x47, false),
+        "Numpad8" => (0x48, false),
+        "Numpad9" => (0x49, false),
+        "NumpadSubtract" => (0x4A, false),
+        "Numpad4" => (0x4B, false),
+        "Numpad5" => (0x4C, false),
+        "Numpad6" => (0x4D, false),
+        "NumpadAdd" => (0x4E, false),
+        "Numpad1" => (0x4F, false),
+        "Numpad2" => (0x50, false),
+        "Numpad3" => (0x51, false),
+        "Numpad0" => (0x52, false),
+        "NumpadDecimal" => (0x53, false),
+        "IntlBackslash" => (0x56, false),
+        "NumpadEnter" => (0x1C, true),
+        "ControlRight" => (0x1D, true),
+        "NumpadDivide" => (0x35, true),
+        "PrintScreen" => (0x37, true),
+        "AltRight" => (0x38, true),
+        "NumLock" => (0x45, true),
+        "Home" => (0x47, true),
+        "ArrowUp" => (0x48, true),
+        "PageUp" => (0x49, true),
+        "ArrowLeft" => (0x4B, true),
+        "ArrowRight" => (0x4D, true),
+        "End" => (0x4F, true),
+        "ArrowDown" => (0x50, true),
+        "PageDown" => (0x51, true),
+        "Insert" => (0x52, true),
+        "Delete" => (0x53, true),
+        "MetaLeft" => (0x5B, true),
+        "MetaRight" => (0x5C, true),
+        "ContextMenu" => (0x5D, true),
+        _ => return None,
+    };
+    Some((scan, ext))
 }
 
 unsafe fn is_own_window(pt: POINT) -> bool {

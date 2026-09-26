@@ -79,6 +79,12 @@ fn capture_keys() -> Option<Vec<KeyRef>> {
     keys
 }
 
+/// Key events from the settings window while recording or capturing.
+#[tauri::command]
+fn ui_key(code: String, down: bool) {
+    input::ui_key(&code, down);
+}
+
 #[tauri::command]
 fn cancel_capture() {
     input::cancel_capture();
@@ -120,6 +126,7 @@ fn main() {
             start_recording,
             stop_recording,
             capture_keys,
+            ui_key,
             cancel_capture,
             get_autostart,
             set_autostart,
