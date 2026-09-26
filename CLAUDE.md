@@ -20,6 +20,17 @@ Public repo: https://github.com/anthonyradke/lightswitch (owner `anthonyradke`, 
   - `exec.rs` runs side-button actions and macros; `state.rs` shared state and profile operations
   - `config.rs` data model + JSON persistence; `tray.rs`; `hotkeys.rs` (global shortcuts)
 - `app/ui`: plain HTML/CSS/JS (no bundler), talks to Rust through Tauri commands/events
+  - The window is **frameless** (`decorations(false)`, `maximizable(false)`); `index.html` draws the title bar
+    (`data-tauri-drag-region` + minimize/close buttons calling `appWindow.minimize()` / `.close()`). Those need
+    `core:window:allow-start-dragging|minimize|close` in `capabilities/default.json`.
+  - Design (user's direction: G HUB-like, one full-bleed screen, **no boxed cards / pills / bordered widgets**):
+    near-black canvas, text-style buttons and underline toggles, one violet→blue gradient (`--grad`) with soft
+    glow reserved for selected/live state. Nav tabs live in the title bar; profiles are tabs across the Mouse page.
+  - `render()` builds HTML strings and applies them with `morph()` (an in-place DOM patcher in `app.js`), never
+    `innerHTML` on the page: full replacement made every click flash. Elements with a different `data-key` are
+    swapped wholesale (that is what replays the page fade-in on page changes).
+  - `mouseSvg()` draws the mouse from `BODY`, an outline traced from the official top-down product shot. Clicking a
+    side button (or its callout) sets `view.side`, which picks the button shown in the Assignment section.
 - `scripts/`: dev helpers: `screenshot.ps1`, `click.ps1` (click/scroll relative to the window), `keys.ps1` (inject a key chord with scan codes)
 
 ## Build / run (PowerShell)
@@ -47,7 +58,7 @@ Tools are installed but a fresh shell may need PATH refreshed:
 Done and verified on the real mouse: DPI stages, polling rate, profile create/rename/duplicate/delete/activate, profile hotkeys, side-button bindings (user confirmed DPI shift works), macro playback (Notepad test), close-to-tray, startup apply.
 Fixed but **awaiting the user's real-keyboard confirmation**: recording macros and "key combination" capture while the lightswitch window is focused (commit 4dbc7c7).
 Not done: GitHub Release with the installer (offered to the user, waiting until they confirm testing), launch-at-startup not yet tried by the user.
-The user has a macro named "678 - valheim" with no steps recorded yet; leave their config alone.
+The user has a macro named "678 - valheim" (types 6, 7, 8) bound to Forward; leave their config alone.
 
 ## Working notes
 - Verify UI changes by screenshot (`scripts/screenshot.ps1`, then `Read` the PNG) rather than assuming.
