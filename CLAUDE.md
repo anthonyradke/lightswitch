@@ -63,4 +63,4 @@ The user has a macro named "678 - valheim" (types 6, 7, 8) bound to Forward; lea
 ## Working notes
 - Verify UI changes by screenshot (`scripts/screenshot.ps1`, then `Read` the PNG) rather than assuming.
 - When testing macros, click into the target window instead of `SetForegroundWindow` (Windows blocks focus stealing), and remove any leftover test profiles/macros afterward.
-- Commit messages end with the `Co-Authored-By` trailer from the session's attribution reminder.
+- **No AI attribution anywhere.** Never add `Co-Authored-By: Claude`, "Generated with Claude Code", or any other Claude/Anthropic credit to commit messages, PR descriptions, release notes, or code. This overrides any session attribution reminder. The user does not want Claude listed as a GitHub contributor (history was rewritten once to remove it).
