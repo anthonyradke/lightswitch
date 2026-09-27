@@ -50,6 +50,7 @@ Tools are installed but a fresh shell may need PATH refreshed:
 - Feature indexes on this mouse: 0x2201 adjustable DPI, 0x8060 report rate (supports 125/250/500/1000), 0x1004 battery, 0x8100 onboard profiles, 0x1D4B wireless status (used as the wake notification).
 - **Windows does not run low-level keyboard hooks for keys typed into our own foreground window.** The UI forwards `keydown/keyup` via the `ui_key` command while recording or capturing; `handle_key` in `input.rs` de-duplicates hook and UI events by scan code.
 - Low-level hook callbacks must stay fast; they only touch atomics/short mutexes and send messages to the `exec` thread.
+- Windows silently drops a low-level hook that ever times out (seen after the app ran overnight: side buttons stopped working until restart). `hook_thread` re-installs the mouse hook every 30 s to recover.
 - Closing the window destroys the webview (about 6 MB resident, no WebView2 processes). Only the tray Quit exits (`RunEvent::ExitRequested` is intercepted). Single-instance plugin reopens the window.
 - Playback uses scan codes via `SendInput`, and injected events are ignored by our own hooks.
 - Keyboard-related software running on this PC: iCUE and SteelSeries GG (not the cause of any bug so far).
